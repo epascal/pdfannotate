@@ -1,0 +1,17 @@
+{
+  "name": "pdfannotate",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n FRONT,BACK -c blue,green \"npm -w frontend run dev\" \"npm -w backend run dev\"",
+    "build": "npm -w frontend run build && npm -w backend run build",
+    "start": "npm -w backend run start",
+    "lint": "npm -w frontend run lint && npm -w backend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
