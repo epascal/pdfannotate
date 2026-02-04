@@ -1,0 +1,36 @@
+# Dependencies
+node_modules
+*/node_modules
+
+# Build outputs (will be rebuilt in container)
+backend/dist
+frontend/dist
+frontend/public/pdfjs
+
+# Data
+backend/data
+
+# Development files
+.git
+.gitignore
+*.md
+LICENSE
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
