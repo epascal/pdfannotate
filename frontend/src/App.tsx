@@ -6,6 +6,7 @@ import { flushOutbox, onSyncChange, getPendingCount } from "./sync";
 
 function HomePage() {
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<Array<{ docId: string; filename: string; updatedAt: number; revLocal: number }>>([]);
 
   async function refresh() {
@@ -25,6 +26,17 @@ function HomePage() {
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
+  async function handleFile(file: File) {
+    if (file.type !== "application/pdf") {
+      alert("Merci de déposer un PDF.");
+      return;
+    }
+    const docId = nanoid();
+    await addDocFromDrop({ docId, file });
+    await refresh();
+    navigate(`/doc/${docId}`);
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -32,8 +44,21 @@ function HomePage() {
         <div className="subtitle">Offline-first: drop un PDF, annote, autosave, puis synchro.</div>
       </header>
 
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept="application/pdf"
+        className="dropzoneFileInput"
+        onChange={e => {
+          const file = e.target.files?.[0];
+          if (file) void handleFile(file);
+          e.target.value = "";
+        }}
+        aria-hidden
+      />
       <section
         className="dropzone"
+        onClick={() => fileInputRef.current?.click()}
         onDragOver={e => {
           e.preventDefault();
           e.stopPropagation();
@@ -42,19 +67,11 @@ function HomePage() {
           e.preventDefault();
           const file = e.dataTransfer.files?.[0];
           if (!file) return;
-          if (file.type !== "application/pdf") {
-            alert("Merci de déposer un PDF.");
-            return;
-          }
-
-          const docId = nanoid();
-          await addDocFromDrop({ docId, file });
-          await refresh();
-          navigate(`/doc/${docId}`);
+          await handleFile(file);
         }}
       >
         <div className="dropzoneInner">
-          <div className="dropTitle">Dépose un PDF ici</div>
+          <div className="dropTitle">Dépose un PDF ici ou clique pour choisir</div>
           <div className="dropHint">Le lien unique est généré tout de suite, même sans internet.</div>
           <div className="dropHint">Astuce: Ctrl+S dans le viewer déclenche la sauvegarde côté app (pas un téléchargement).</div>
         </div>
