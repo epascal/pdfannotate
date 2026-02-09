@@ -1,7 +1,7 @@
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { nanoid } from "nanoid";
-import { addDocFromDrop, getAllDocs, getDocBlobLatest, upsertDocMeta, cleanupOutbox } from "./db";
+import { addDocFromDrop, getAllDocs, getDocBlobLatest, saveDocRevision, upsertDocMeta, cleanupOutbox } from "./db";
 import { flushOutbox, onSyncChange, getPendingCount } from "./sync";
 
 function HomePage() {
@@ -265,71 +265,105 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
     return u.toString();
   }, [docId, objectUrl, filename]);
 
+  // Fetch meta avec timeout court, ne lance jamais (retourne null en cas d'erreur / offline)
+  const fetchMetaSafe = useCallback(async (id: string, timeoutMs = 3000): Promise<{ filename: string; rev: number } | null> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`/api/docs/${encodeURIComponent(id)}/meta`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      return (await res.json()) as { filename: string; rev: number };
+    } catch {
+      clearTimeout(timer);
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       setStatus("Chargement…");
-      let local = await getDocBlobLatest(docId);
-      let localMeta = await upsertDocMeta(docId, m => m);
+      const local = await getDocBlobLatest(docId);
+      const localMeta = await upsertDocMeta(docId, m => m);
       if (cancelled) return;
 
-      // Vérifier si le serveur a une version plus récente
-      if (navigator.onLine) {
-        try {
-          const metaRes = await fetch(`/api/docs/${encodeURIComponent(docId)}/meta`);
-          if (metaRes.ok) {
-            const serverMeta = await metaRes.json() as { filename: string; rev: number };
-            setRevServer(serverMeta.rev);
-            
-            // Télécharger si pas de version locale
-            if (!local) {
-              setStatus("Téléchargement depuis le serveur…");
-              const fileRes = await fetch(`/api/docs/${encodeURIComponent(docId)}/file`);
-              if (fileRes.ok) {
-                const blob = await fileRes.blob();
-                if (cancelled) return;
-                await addDocFromDrop({
-                  docId,
-                  file: new File([blob], serverMeta.filename, { type: "application/pdf" }),
-                  rev: serverMeta.rev,
-                  fromServer: true
-                });
-                local = await getDocBlobLatest(docId);
-                localMeta = await upsertDocMeta(docId, m => m);
+      // === Offline-first: afficher la version locale IMMÉDIATEMENT ===
+      if (local) {
+        setFilename(localMeta.filename);
+        setRevLocal(localMeta.revLocal);
+        setObjectUrl(URL.createObjectURL(local));
+        setStatus("Prêt.");
+
+        // Meta en arrière-plan uniquement si online, sans jamais bloquer ni faire planter
+        if (navigator.onLine) {
+          void fetchMetaSafe(docId)
+            .then(serverMeta => {
+              if (cancelled || !serverMeta) return;
+              setRevServer(serverMeta.rev);
+              if (serverMeta.rev > localMeta.revLocal) {
+                setConflict({ serverRev: serverMeta.rev, serverFilename: serverMeta.filename });
               }
-            } else if (serverMeta.rev > localMeta.revLocal) {
-              // Version serveur plus récente: proposer le choix
-              setConflict({ serverRev: serverMeta.rev, serverFilename: serverMeta.filename });
+            })
+            .catch(() => {});
+        }
+        return;
+      }
+
+      // === Pas de version locale: tenter le serveur via fetchMetaSafe (non-bloquant) ===
+      if (navigator.onLine) {
+        const serverMeta = await fetchMetaSafe(docId);
+        if (cancelled) return;
+
+        if (serverMeta) {
+          setRevServer(serverMeta.rev);
+          setStatus("Téléchargement depuis le serveur…");
+          try {
+            const fileRes = await fetch(`/api/docs/${encodeURIComponent(docId)}/file`);
+            if (fileRes.ok) {
+              const blob = await fileRes.blob();
+              if (cancelled) return;
+              await addDocFromDrop({
+                docId,
+                file: new File([blob], serverMeta.filename, { type: "application/pdf" }),
+                rev: serverMeta.rev,
+                fromServer: true
+              });
+              const newLocal = await getDocBlobLatest(docId);
+              const newMeta = await upsertDocMeta(docId, m => m);
+              if (cancelled) return;
+              if (newLocal) {
+                setFilename(newMeta.filename);
+                setRevLocal(newMeta.revLocal);
+                setObjectUrl(URL.createObjectURL(newLocal));
+                setStatus("Prêt.");
+                return;
+              }
+            } else if (mode === "stable") {
+              setStatus(`Document introuvable sur le serveur (HTTP ${fileRes.status}).`);
+              return;
             }
-          } else if (!local && mode === "stable") {
-            setStatus(`Document introuvable sur le serveur (HTTP ${metaRes.status}).`);
-            return;
+          } catch (e) {
+            console.error("Erreur téléchargement:", e);
+            if (mode === "stable") {
+              setStatus("Erreur de connexion au serveur.");
+              return;
+            }
           }
-        } catch (e) {
-          console.error("Erreur sync:", e);
-          if (!local && mode === "stable") {
-            setStatus("Erreur de connexion au serveur.");
-            return;
-          }
+        } else if (mode === "stable") {
+          setStatus("Document introuvable ou hors-ligne.");
+          return;
         }
       }
 
       if (cancelled) return;
 
-      setFilename(localMeta.filename);
-      setRevLocal(localMeta.revLocal);
-
-      const blob2 = await getDocBlobLatest(docId);
-      if (!blob2) {
-        setStatus("PDF introuvable localement.");
-        return;
-      }
-      const url = URL.createObjectURL(blob2);
-      setObjectUrl(url);
-      // Les bytes de référence seront envoyés par PDF.js via PDFJS_LOADED après chargement
-      
-      setStatus(conflict ? `Conflit détecté.` : "Prêt.");
+      // Aucune version disponible
+      setStatus(mode === "stable"
+        ? "PDF introuvable (hors-ligne, aucune copie locale)."
+        : "PDF introuvable localement."
+      );
     }
 
     void load();
@@ -338,8 +372,7 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docId, mode]);
+  }, [docId, mode, fetchMetaSafe]);
 
   // Sync quand on revient online
   useEffect(() => {
@@ -378,16 +411,13 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
       
       if (msg.type === "PDFJS_SAVE" && msg.docId === docId && msg.bytes instanceof ArrayBuffer) {
         const bytes = new Uint8Array(msg.bytes);
+        const name = filename; // closure
         void (async () => {
-          const newMeta = await upsertDocMeta(docId, m => ({
-            ...m,
-            updatedAt: Date.now(),
-            revLocal: m.revLocal + 1
-          }));
-          await addDocFromDrop({
+          setStatus("Sauvegarde…");
+          const newMeta = await saveDocRevision({
             docId,
-            file: new File([bytes], newMeta.filename, { type: "application/pdf" }),
-            rev: newMeta.revLocal
+            bytes,
+            filename: name
           });
           lastSavedBytesRef.current = bytes;
           setRevLocal(newMeta.revLocal);
@@ -398,7 +428,7 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [docId]);
+  }, [docId, filename]);
 
   const shareUrl = `${window.location.origin}/d/${docId}`;
 

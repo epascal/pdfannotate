@@ -104,6 +104,48 @@ export async function getDocBlobLatest(docId: string): Promise<Blob | null> {
   return new Blob([entry.bytes], { type: "application/pdf" });
 }
 
+/**
+ * Sauvegarde une nouvelle révision du document de façon atomique (meta + blob en une transaction).
+ * Évite de perdre les modifications si l'utilisateur quitte avant la fin des écritures.
+ */
+export async function saveDocRevision(opts: {
+  docId: string;
+  bytes: Uint8Array;
+  filename: string;
+}): Promise<DocMeta> {
+  const { docId, bytes, filename } = opts;
+  ensureDocId(docId);
+  const db = await dbPromise;
+  const now = Date.now();
+
+  const tx = db.transaction(["docs", "blobs"], "readwrite");
+  const docsStore = tx.objectStore("docs");
+  const blobsStore = tx.objectStore("blobs");
+
+  const existing = await docsStore.get(docId);
+  const base: DocMeta = existing ?? {
+    docId,
+    filename: filename || `${docId}.pdf`,
+    createdAt: now,
+    updatedAt: now,
+    revLocal: 0
+  };
+  const newRev = base.revLocal + 1;
+  const newMeta: DocMeta = {
+    ...base,
+    filename: filename || base.filename,
+    updatedAt: now,
+    revLocal: newRev
+  };
+
+  await docsStore.put(newMeta);
+  await blobsStore.put({ docId, rev: newRev, bytes });
+  await tx.done;
+
+  await enqueueUpload({ docId, rev: newRev, bytes });
+  return newMeta;
+}
+
 export async function addDocFromDrop(opts: { docId: string; file: File; rev?: number; fromServer?: boolean }) {
   const { docId, file, fromServer } = opts;
   ensureDocId(docId);

@@ -9,8 +9,7 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: [
         "favicon.svg",
-        "pdfjs/**",
-        "manifest.webmanifest"
+        "pdfjs/**"
       ],
       manifest: {
         name: "pdfannotate",
@@ -20,11 +19,21 @@ export default defineConfig({
         display: "standalone",
         background_color: "#0b1220",
         theme_color: "#0b1220",
-        icons: [{ src: "/favicon.svg", sizes: "128x128", type: "image/svg+xml" }]
+        icons: [
+          { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+        ]
       },
       workbox: {
-        globPatterns: ["**/*.{js,mjs,css,html,ico,png,svg,webmanifest,woff2,wasm,bcmap,cmap}"],
+        globPatterns: ["**/*.{js,mjs,css,html,ico,png,svg,woff2,wasm,bcmap,cmap}"],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB to include pdf.worker.mjs
+        // Ignorer tous les query params pour le matching precache.
+        // Sans ça, /pdfjs/web/viewer.html?file=blob:xxx ne matche PAS
+        // l'entrée precachée "pdfjs/web/viewer.html" → le viewer ne charge pas offline.
+        ignoreURLParametersMatching: [/./],
+        navigateFallback: "/index.html",
+        navigateFallbackDenylist: [/^\/api\//, /^\/pdfjs\//],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/pdfjs/"),
