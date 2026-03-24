@@ -118,9 +118,12 @@ export async function saveDocRevision(opts: {
   const db = await dbPromise;
   const now = Date.now();
 
-  const tx = db.transaction(["docs", "blobs"], "readwrite");
+  // Mettre meta+blob+outbox dans une seule transaction pour éviter
+  // des écritures/lectures supplémentaires (plus fluide en mode hors-ligne).
+  const tx = db.transaction(["docs", "blobs", "outbox"], "readwrite");
   const docsStore = tx.objectStore("docs");
   const blobsStore = tx.objectStore("blobs");
+  const outboxStore = tx.objectStore("outbox");
 
   const existing = await docsStore.get(docId);
   const base: DocMeta = existing ?? {
@@ -140,9 +143,19 @@ export async function saveDocRevision(opts: {
 
   await docsStore.put(newMeta);
   await blobsStore.put({ docId, rev: newRev, bytes });
-  await tx.done;
 
-  await enqueueUpload({ docId, rev: newRev, bytes });
+  // Job outbox pour la future synchro.
+  // `put` écrase silencieusement si jamais la même clé existait déjà.
+  const id = `${docId}:${newRev}`;
+  await outboxStore.put({
+    id,
+    docId,
+    rev: newRev,
+    bytes,
+    createdAt: now,
+    tries: 0
+  });
+  await tx.done;
   return newMeta;
 }
 
@@ -178,8 +191,7 @@ export async function addDocFromDrop(opts: { docId: string; file: File; rev?: nu
 export async function enqueueUpload(params: { docId: string; rev: number; bytes: Uint8Array }) {
   const db = await dbPromise;
   const id = `${params.docId}:${params.rev}`;
-  const existing = await db.get("outbox", id);
-  if (existing) return;
+  // `put` suffit: la clé est stable (`id`) et écrase proprement si besoin.
   await db.put("outbox", {
     id,
     docId: params.docId,
@@ -194,6 +206,11 @@ export async function listOutbox(): Promise<OutboxEntry[]> {
   const db = await dbPromise;
   const all = await db.getAll("outbox");
   return all.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function countOutbox(): Promise<number> {
+  const db = await dbPromise;
+  return await db.count("outbox");
 }
 
 export async function bumpOutboxTry(id: string, error: string) {

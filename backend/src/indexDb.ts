@@ -25,13 +25,15 @@ export class IndexDb {
   }
 
   static async open(dbPath: string): Promise<IndexDb> {
-    // Find the wasm file relative to node_modules
-    const wasmPath = path.join(
-      path.dirname(require.resolve("sql.js/package.json")),
-      "dist",
-      "sql-wasm.wasm"
-    );
-    const SQL = await initSqlJs({ locateFile: () => wasmPath });
+    // Node 22 + sql.js package `exports` => résolution de `sql.js/package.json` cassée.
+    // On résout directement le binaire wasm fourni par le package.
+    const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
+    const SQL = await initSqlJs({
+      locateFile: (fileName: string) => {
+        if (fileName === "sql-wasm.wasm") return wasmPath;
+        return fileName;
+      }
+    });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let db: any;

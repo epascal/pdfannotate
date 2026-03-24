@@ -422,7 +422,9 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
           lastSavedBytesRef.current = bytes;
           setRevLocal(newMeta.revLocal);
           setStatus(`Sauvegardé (rev ${newMeta.revLocal}).`);
-          await flushOutbox();
+          // Ne pas attendre: la synchro (si online) peut prendre du temps.
+          // L'UI reste réactive grâce aux callbacks de sync.
+          void flushOutbox();
         })();
       }
     }
