@@ -8,7 +8,7 @@ import { assertDocId, parseIntField } from "./validate";
 
 const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 async function ensureDirs() {
   await fs.mkdir(dataDir, { recursive: true });

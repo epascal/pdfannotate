@@ -17,12 +17,30 @@ function notifySyncChange(syncing: boolean, pending: number) {
   syncCallbacks.forEach(cb => cb(syncing, pending));
 }
 
-const UPLOAD_TIMEOUT_MS = 12000;
+// Gros PDF / réseau lent: laisser largement le temps (nginx aligné).
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+
+class SyncHttpError extends Error {
+  status: number;
+  revServer?: number;
+
+  constructor(status: number, message: string, revServer?: number) {
+    super(message);
+    this.name = "SyncHttpError";
+    this.status = status;
+    this.revServer = revServer;
+  }
+}
 
 function isNetworkLikeError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const message = err.message.toLowerCase();
-  return err.name === "AbortError" || message.includes("networkerror") || message.includes("failed to fetch");
+  // AbortError seul (timeout) n'est pas forcément une coupure réseau.
+  return message.includes("networkerror") || message.includes("failed to fetch");
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
 
 async function uploadOne(job: { id: string; docId: string; rev: number; bytes: Uint8Array }, meta: DocMeta | null) {
@@ -49,12 +67,16 @@ async function uploadOne(job: { id: string; docId: string; rev: number; bytes: U
     clearTimeout(timer);
   }
   if (res.status === 409) {
-    const body = await res.json().catch(() => null);
-    throw new Error(`Conflit serveur (409). revServer=${body?.revServer ?? "?"}`);
+    const body = (await res.json().catch(() => null)) as { revServer?: number } | null;
+    throw new SyncHttpError(
+      409,
+      `Conflit serveur (409). revServer=${body?.revServer ?? "?"}`,
+      body?.revServer
+    );
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} ${text}`);
+    throw new SyncHttpError(res.status, `HTTP ${res.status} ${text}`);
   }
   const json = (await res.json()) as { revServer: number };
   console.log(`[sync] Upload OK ${job.docId} revServer=${json.revServer}`);
@@ -98,16 +120,39 @@ export async function flushOutbox(): Promise<void> {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[sync] ✗ ${job.docId}: ${msg}`);
-        await bumpOutboxTry(job.id, msg);
-        // En cas de panne réseau/timeout, sortir vite pour ne pas bloquer l'UI
-        // et attendre un prochain déclenchement (événement online / action utilisateur).
-        if (!navigator.onLine || isNetworkLikeError(e)) {
+
+        // 409 = le serveur a déjà cette révision (ou plus récente).
+        // Cas typique: upload réussi puis réponse perdue / SW abort → le job reste en outbox.
+        const conflict =
+          (e instanceof SyncHttpError && e.status === 409) ||
+          (typeof msg === "string" && msg.includes("(409)"));
+        if (conflict) {
+          const revServer = e instanceof SyncHttpError ? e.revServer : undefined;
+          if (typeof revServer === "number" && revServer >= job.rev) {
+            await upsertDocMeta(job.docId, m => ({
+              ...m,
+              revServer: Math.max(m.revServer ?? 0, revServer),
+              lastSyncedAt: Date.now()
+            }));
+          }
+          await removeOutbox(job.id);
+          console.log(`[sync] Job 409 retiré ${job.docId} rev ${job.rev} (serveur=${revServer ?? "?"})`);
+        } else if (!navigator.onLine || isNetworkLikeError(e)) {
+          await bumpOutboxTry(job.id, msg);
+          // Coupure réseau réelle: sortir vite pour ne pas bloquer l'UI.
           console.log("[sync] Arrêt du cycle courant (réseau indisponible)");
           break;
+        } else if (isAbortError(e)) {
+          // Timeout upload: garder le job, sortir du cycle, retenter plus tard.
+          await bumpOutboxTry(job.id, msg);
+          console.log("[sync] Timeout upload, pause du cycle");
+          break;
+        } else {
+          await bumpOutboxTry(job.id, msg);
+          // Backoff exponentiel pour erreurs serveur temporaires.
+          const tries = Math.min(6, Math.max(1, job.tries ?? 1));
+          await sleep(250 * 2 ** tries);
         }
-        // Backoff exponentiel pour erreurs serveur temporaires.
-        const tries = Math.min(6, Math.max(1, job.tries ?? 1));
-        await sleep(250 * 2 ** tries);
       }
       jobs = await listOutbox();
       notifySyncChange(true, jobs.length);
@@ -136,4 +181,3 @@ if (typeof window !== "undefined") {
     void flushOutbox();
   });
 }
-

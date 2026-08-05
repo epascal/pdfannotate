@@ -34,6 +34,8 @@ export default defineConfig({
         ignoreURLParametersMatching: [/./],
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api\//, /^\/pdfjs\//],
+        // Ne pas mettre /api/ en runtimeCaching: un NetworkFirst avec timeout
+        // coupe les gros uploads et provoque des 409 au retry.
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.startsWith("/pdfjs/"),
@@ -41,15 +43,6 @@ export default defineConfig({
             options: {
               cacheName: "pdfjs-assets",
               expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }
-            }
-          },
-          {
-            urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "api-cache",
-              networkTimeoutSeconds: 3,
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 5 }
             }
           }
         ]
