@@ -356,6 +356,7 @@ a {
 
 .viewerWrap {
   height: calc(100vh - 80px);
+  height: calc(100dvh - 80px);
   border: 1px solid var(--border);
   border-radius: 14px;
   overflow: hidden;
@@ -365,11 +366,82 @@ a {
 
 .viewerWrapWithPanel {
   height: calc(100vh - 220px);
+  height: calc(100dvh - 220px);
 }
 
 .viewer {
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+/* Bandeau complètement masqué: viewer plein écran */
+.pageFull.topBarCollapsed {
+  padding: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.pageFull.topBarCollapsed .viewerWrap {
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+
+.topBarReveal {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  z-index: 40;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(11, 18, 32, 0.88);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.topBarReveal:active {
+  transform: scale(0.96);
+}
+
+@media (max-width: 720px) {
+  .pageFull:not(.topBarCollapsed) {
+    padding: 8px;
+  }
+
+  .topBar {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  .topBarTitle {
+    max-width: 42vw;
+  }
+
+  .topBarChip {
+    display: none;
+  }
+
+  .topBarChipPending,
+  .topBarChipAlert {
+    display: inline-block;
+  }
+
+  .viewerWrap {
+    height: calc(100dvh - 64px);
+  }
+
+  .viewerWrapWithPanel {
+    height: calc(100dvh - 200px);
+  }
 }
 

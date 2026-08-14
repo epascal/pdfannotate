@@ -1,8 +1,27 @@
-import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, Route, Routes, useNavigate, useParams, type NavigateFunction } from "react-router-dom";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { nanoid } from "nanoid";
 import { addDocFromDrop, getAllDocs, getDocBlobLatest, saveDocRevision, upsertDocMeta, cleanupOutbox } from "./db";
 import { flushOutbox, onSyncChange, getPendingCount } from "./sync";
+
+function isPdfFile(file: File): boolean {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+async function importPdfAndOpen(
+  file: File,
+  navigate: NavigateFunction,
+  onImported?: () => void | Promise<void>
+) {
+  if (!isPdfFile(file)) {
+    alert("Merci de déposer un PDF.");
+    return;
+  }
+  const docId = nanoid();
+  await addDocFromDrop({ docId, file });
+  await onImported?.();
+  navigate(`/doc/${docId}`);
+}
 
 function HomePage() {
   const navigate = useNavigate();
@@ -26,15 +45,30 @@ function HomePage() {
     return () => window.removeEventListener("online", onOnline);
   }, []);
 
+  // PWA File Handling API: ouvrir un PDF lancé depuis l'OS / "Ouvrir avec".
+  useEffect(() => {
+    const w = window as Window & {
+      launchQueue?: {
+        setConsumer: (cb: (params: { files: FileSystemFileHandle[] }) => void) => void;
+      };
+    };
+    if (!w.launchQueue) return;
+    w.launchQueue.setConsumer(launchParams => {
+      void (async () => {
+        const handles = launchParams.files ?? [];
+        for (const handle of handles) {
+          if (handle.kind !== "file") continue;
+          const file = await handle.getFile();
+          if (!isPdfFile(file)) continue;
+          await importPdfAndOpen(file, navigate, refresh);
+          break;
+        }
+      })();
+    });
+  }, [navigate]);
+
   async function handleFile(file: File) {
-    if (file.type !== "application/pdf") {
-      alert("Merci de déposer un PDF.");
-      return;
-    }
-    const docId = nanoid();
-    await addDocFromDrop({ docId, file });
-    await refresh();
-    navigate(`/doc/${docId}`);
+    await importPdfAndOpen(file, navigate, refresh);
   }
 
   return (
@@ -137,14 +171,41 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const lastSavedBytesRef = useRef<Uint8Array | null>(null);
   
-  // Panneau escamotable
+  // Panneau escamotable + bandeau masquable (surtout utile sur mobile)
   const [panelOpen, setPanelOpen] = useState(false);
+  const [topBarHidden, setTopBarHidden] = useState(() => {
+    try {
+      return localStorage.getItem("pdfannotate.topBarHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [syncing, setSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+
+  const hideTopBar = useCallback(() => {
+    setPanelOpen(false);
+    setTopBarHidden(true);
+    try {
+      localStorage.setItem("pdfannotate.topBarHidden", "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const showTopBar = useCallback(() => {
+    setTopBarHidden(false);
+    try {
+      localStorage.setItem("pdfannotate.topBarHidden", "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   // Ouvrir le panneau automatiquement uniquement en cas de conflit
   useEffect(() => {
     if (conflict) {
+      setTopBarHidden(false);
       setPanelOpen(true);
     }
   }, [conflict]);
@@ -439,50 +500,70 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
   const hasPending = pendingCount > 0;
 
   return (
-    <div className="page pageFull">
-      {/* Barre minimale toujours visible */}
-      <div className="topBar">
-        <div className="topBarLeft">
-          <Link className="linkIcon" to="/">←</Link>
-          <span className="topBarTitle">{filename}</span>
-          <span className="topBarChip">rev {revLocal}</span>
-          {hasPending && (
-            <span className="topBarChip topBarChipPending">
-              {syncing ? "⟳" : "●"} {pendingCount} en attente
-            </span>
-          )}
-          {hasAlert && <span className="topBarChip topBarChipAlert">⚠️ Conflit</span>}
+    <div className={`page pageFull ${topBarHidden ? "topBarCollapsed" : ""}`}>
+      {!topBarHidden && (
+        <div className="topBar">
+          <div className="topBarLeft">
+            <Link className="linkIcon" to="/">←</Link>
+            <span className="topBarTitle">{filename}</span>
+            <span className="topBarChip">rev {revLocal}</span>
+            {hasPending && (
+              <span className="topBarChip topBarChipPending">
+                {syncing ? "⟳" : "●"} {pendingCount} en attente
+              </span>
+            )}
+            {hasAlert && <span className="topBarChip topBarChipAlert">⚠️ Conflit</span>}
+          </div>
+          <div className="topBarRight">
+            <button
+              className="topBarBtn"
+              onClick={async () => {
+                const blob = await getDocBlobLatest(docId);
+                if (blob) {
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = filename;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }
+              }}
+              title="Télécharger le PDF"
+            >
+              ⬇️
+            </button>
+            <button
+              className="topBarBtn"
+              onClick={() => setPanelOpen(!panelOpen)}
+              title={panelOpen ? "Masquer les détails" : "Afficher les détails"}
+            >
+              {panelOpen ? "▲" : "▼"}
+            </button>
+            <button
+              className="topBarBtn topBarBtnHide"
+              onClick={hideTopBar}
+              title="Masquer le bandeau"
+              aria-label="Masquer le bandeau"
+            >
+              ✕
+            </button>
+          </div>
         </div>
-        <div className="topBarRight">
-          <button
-            className="topBarBtn"
-            onClick={async () => {
-              const blob = await getDocBlobLatest(docId);
-              if (blob) {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = filename;
-                a.click();
-                URL.revokeObjectURL(url);
-              }
-            }}
-            title="Télécharger le PDF"
-          >
-            ⬇️
-          </button>
-          <button 
-            className="topBarBtn"
-            onClick={() => setPanelOpen(!panelOpen)}
-            title={panelOpen ? "Masquer les détails" : "Afficher les détails"}
-          >
-            {panelOpen ? "▲" : "▼"}
-          </button>
-        </div>
-      </div>
+      )}
+
+      {topBarHidden && (
+        <button
+          className="topBarReveal"
+          onClick={showTopBar}
+          title="Afficher le bandeau"
+          aria-label="Afficher le bandeau"
+        >
+          {hasAlert ? "⚠️" : hasPending ? "●" : "☰"}
+        </button>
+      )}
 
       {/* Panneau escamotable */}
-      {panelOpen && (
+      {!topBarHidden && panelOpen && (
         <div className="panel">
           <section className="card cardTight">
             <div className="row">
@@ -534,7 +615,7 @@ function DocPage({ docId, mode }: { docId: string; mode: "local" | "stable" }) {
         </div>
       )}
 
-      <div className={`viewerWrap ${panelOpen ? "viewerWrapWithPanel" : ""}`}>
+      <div className={`viewerWrap ${!topBarHidden && panelOpen ? "viewerWrapWithPanel" : ""}`}>
         {viewerUrl ? (
           <iframe id="pdf-frame" className="viewer" src={viewerUrl} title="PDF viewer" />
         ) : (

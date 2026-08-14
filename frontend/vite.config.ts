@@ -16,6 +16,7 @@ export default defineConfig({
         short_name: "pdfannotate",
         description: "Offline-first PDF annotate + sync",
         start_url: "/",
+        scope: "/",
         display: "standalone",
         background_color: "#0b1220",
         theme_color: "#0b1220",
@@ -23,8 +24,18 @@ export default defineConfig({
           { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png", purpose: "any" },
           { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any" },
           { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+        ],
+        // Enregistre l'app installée comme ouvreur possible de PDF (Chrome/Edge desktop, Android Chromium).
+        file_handlers: [
+          {
+            action: "/",
+            accept: {
+              "application/pdf": [".pdf"]
+            },
+            launch_type: "single-client"
+          }
         ]
-      },
+      } as import("vite-plugin-pwa").ManifestOptions,
       workbox: {
         globPatterns: ["**/*.{js,mjs,css,html,ico,png,svg,woff2,wasm,bcmap,cmap}"],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB to include pdf.worker.mjs
