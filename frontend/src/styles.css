@@ -389,10 +389,13 @@ a {
   margin: 0;
 }
 
+/* En bas à gauche pour ne pas passer devant la toolbar PDF.js (en haut). */
 .topBarReveal {
   position: fixed;
-  top: max(8px, env(safe-area-inset-top));
-  left: max(8px, env(safe-area-inset-left));
+  top: auto;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: max(12px, env(safe-area-inset-left));
+  right: auto;
   z-index: 40;
   width: 40px;
   height: 40px;
